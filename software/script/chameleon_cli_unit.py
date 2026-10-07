@@ -756,6 +756,28 @@ class LFJablotronIdArgsUnit(DeviceRequiredUnit):
         raise NotImplementedError("Please implement this")
 
 
+class LFParadoxIdArgsUnit(DeviceRequiredUnit):
+    @staticmethod
+    def add_card_arg(parser: ArgumentParserNoExit, required=False):
+        parser.add_argument(
+            "--id", type=str, required=required, help="Paradox raw id (12 bytes hex)", metavar="<hex>"
+        )
+        return parser
+
+    def before_exec(self, args: argparse.Namespace):
+        if not super().before_exec(args):
+            return False
+        if args.id is None or not re.match(r"^[a-fA-F0-9]{24}$", args.id):
+            raise ArgsParserError("ID must include 24 HEX symbols (12 bytes)")
+        return True
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        raise NotImplementedError("Please implement this")
+
+    def on_exec(self, args: argparse.Namespace):
+        raise NotImplementedError("Please implement this")
+
+
 IDTECK_PREAMBLE_HEX = "4944544B"
 IDTECK_PREAMBLE_INT = 0x4944544B
 
@@ -910,6 +932,7 @@ lf_ioprox = lf.subgroup("ioprox", "ioProx commands")
 lf_pac = lf.subgroup("pac", "PAC/Stanley commands")
 lf_viking = lf.subgroup("viking", "Viking commands")
 lf_jablotron = lf.subgroup("jablotron", "Jablotron commands")
+lf_paradox = lf.subgroup("paradox", "Paradox commands")
 lf_generic = lf.subgroup("generic", "Generic commands")
 lf_idteck = lf.subgroup("idteck", "IDTECK commands")
 
@@ -6875,6 +6898,9 @@ class HWSlotList(DeviceRequiredUnit):
                     card_id = jablotron_card_id(id)
                     print(f"      {'ID:':40}{color_string((CY, id.hex().upper()))}")
                     print(f"      {'Card:':40}{color_string((CG, str(card_id)))}")
+                if lf_tag_type == TagSpecificType.Paradox:
+                    id = self.cmd.paradox_get_emu_id()
+                    print(f"      {'ID:':40}{color_string((CY, id.hex().upper()))}")
                 if lf_tag_type == TagSpecificType.PAC:
                     id = self.cmd.pac_get_emu_id()
                     id_ascii = ''.join(chr(b) if 0x20 <= b < 0x7f else '.' for b in id)
@@ -7138,6 +7164,81 @@ class LFJablotronEconfig(SlotIndexArgsAndGoUnit, LFJablotronIdArgsUnit):
             print(" - Get Jablotron tag id success.")
             print(f"ID: {response.hex().upper()}")
             print(f"Card: {card_id}")
+
+
+@lf_paradox.command("read")
+class LFParadoxRead(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Scan Paradox tag and print raw id"
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        id = self.cmd.paradox_scan()
+        print(f" Paradox ID: {color_string((CG, id.hex().upper()))}")
+
+
+@lf_paradox.command("write")
+class LFParadoxWriteT55xx(LFParadoxIdArgsUnit, ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Write Paradox raw id to t55xx"
+        return self.add_card_arg(parser, required=True)
+
+    def on_exec(self, args: argparse.Namespace):
+        id_hex = args.id
+        id_bytes = bytes.fromhex(id_hex)
+        self.cmd.paradox_write_to_t55xx(id_bytes)
+        print(f" - Paradox ID: {id_hex.upper()} write done.")
+
+
+@lf_paradox.command("encode")
+class LFParadoxEncode(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Encode Paradox facility code and card number to 12-byte raw id"
+        parser.add_argument("--fc", type=int, required=True, help="Facility code (0-999)")
+        parser.add_argument("--cn", type=int, required=True, help="Card number (0-99999)")
+        return parser
+
+    def before_exec(self, args: argparse.Namespace):
+        if not super().before_exec(args):
+            return False
+        if args.fc < 0 or args.fc > 999:
+            raise ArgsParserError("FC must be between 0 and 999")
+        if args.cn < 0 or args.cn > 99999:
+            raise ArgsParserError("CN must be between 0 and 99999")
+        return True
+
+    def on_exec(self, args: argparse.Namespace):
+        raw = self.cmd.paradox_encode_fc_cn(args.fc, args.cn)
+        print(f" FC: {args.fc}")
+        print(f" CN: {args.cn}")
+        print(f" Raw: {color_string((CG, raw.hex().upper()))}")
+
+
+@lf_paradox.command("econfig")
+class LFParadoxEconfig(SlotIndexArgsAndGoUnit, LFParadoxIdArgsUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Set emulated Paradox card id"
+        self.add_slot_args(parser)
+        self.add_card_arg(parser)
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        if args.id is not None:
+            slotinfo = self.cmd.get_slot_info()
+            selected = SlotNumber.from_fw(self.cmd.get_active_slot())
+            lf_tag_type = TagSpecificType(slotinfo[selected - 1]["lf"])
+            if lf_tag_type != TagSpecificType.Paradox:
+                print(f"{color_string((CR, 'WARNING'))}: Slot type not set to Paradox.")
+            self.cmd.paradox_set_emu_id(bytes.fromhex(args.id))
+            print(" - Set Paradox tag id success.")
+        else:
+            response = self.cmd.paradox_get_emu_id()
+            print(" - Get Paradox tag id success.")
+            print(f"ID: {response.hex().upper()}")
 
 
 @hw_slot.command("nick")

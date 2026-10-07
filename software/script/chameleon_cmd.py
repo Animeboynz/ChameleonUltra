@@ -751,13 +751,16 @@ class ChameleonCMD:
         return resp
 
     @expect_response(Status.LF_TAG_OK)
-    def paradox_write_to_t55xx(self, raw12: bytes, new_key: bytes, old_keys: tuple = ()):
-        if len(raw12) != 12:
-            raise ValueError("Paradox raw data must be 12 bytes")
-        if len(new_key) != 4:
-            raise ValueError("new_key must be 4 bytes")
-        fmt = f"!12s4s{4 * len(old_keys)}s"
-        data = struct.pack(fmt, raw12, new_key, b"".join(old_keys))
+    def paradox_write_to_t55xx(self, id_bytes: bytes):
+        """
+        Write Paradox 12-byte raw data into T55XX.
+
+        :param id_bytes: 12-byte Paradox raw frame
+        :return:
+        """
+        if len(id_bytes) != 12:
+            raise ValueError("The id bytes length must equal 12")
+        data = struct.pack(f'!12s4s{4*len(old_keys)}s', id_bytes, new_key, b''.join(old_keys))
         return self.device.send_cmd_sync(Command.PARADOX_WRITE_TO_T55XX, data)
 
     @expect_response(Status.SUCCESS)

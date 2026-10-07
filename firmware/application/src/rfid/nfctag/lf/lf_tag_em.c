@@ -14,6 +14,7 @@
 #include "protocols/ioprox.h"
 #include "protocols/jablotron.h"
 #include "protocols/pac.h"
+#include "protocols/paradox.h"
 #include "protocols/viking.h"
 #include "syssleep.h"
 #include "tag_emulation.h"
@@ -272,9 +273,9 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
 
     if (type == TAG_TYPE_PARADOX && buffer->length >= LF_PARADOX_TAG_ID_SIZE) {
         m_tag_type = type;
-        paradox_codec_t tmp;
-        memset(&tmp, 0, sizeof(tmp));
-        m_pwm_seq = paradox_modulator(&tmp, buffer->buffer);
+        void *codec = paradox.alloc();
+        m_pwm_seq = paradox.modulator(codec, buffer->buffer);
+        paradox.free(codec);
         NRF_LOG_INFO("load lf paradox data finish.");
         return LF_PARADOX_TAG_ID_SIZE;
     }

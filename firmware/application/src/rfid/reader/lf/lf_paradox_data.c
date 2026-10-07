@@ -1,4 +1,4 @@
-#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "bsp_delay.h"
@@ -9,7 +9,7 @@
 #include "lf_reader_main.h"
 #include "nrfx_saadc.h"
 #include "protocols/paradox.h"
-#include "fskdemod.h"
+#include "rfid_main.h"
 
 #define NRF_LOG_MODULE_NAME lf_paradox
 #include "nrf_log.h"
@@ -22,7 +22,7 @@ NRF_LOG_MODULE_REGISTER();
 static circular_buffer cb;
 
 static void saadc_cb(nrf_saadc_value_t *vals, size_t size) {
-    for (size_t i = 0; i < size; i++) {
+    for (int i = 0; i < size; i++) {
         nrf_saadc_value_t val = vals[i];
         if (!cb_push_back(&cb, &val)) {
             return;
@@ -39,11 +39,11 @@ static void uninit_paradox_hw(void) {
 }
 
 bool paradox_read(uint8_t *data, uint32_t timeout_ms) {
-    paradox_codec_t *codec = (paradox_codec_t *)calloc(1, sizeof(paradox_codec_t));
+    void *codec = paradox.alloc();
     if (codec == NULL) {
         return false;
     }
-    paradox_decoder_start(codec);
+    paradox.decoder.start(codec, 0);
 
     cb_init(&cb, PARADOX_BUFFER_SIZE, sizeof(uint16_t));
     init_paradox_hw();
@@ -54,8 +54,8 @@ bool paradox_read(uint8_t *data, uint32_t timeout_ms) {
     while (!ok && NO_TIMEOUT_1MS(p_at, timeout_ms)) {
         uint16_t val = 0;
         while (!ok && NO_TIMEOUT_1MS(p_at, timeout_ms) && cb_pop_front(&cb, &val)) {
-            if (paradox_decoder_feed(codec, val)) {
-                memcpy(data, paradox_get_data(codec), LF_PARADOX_TAG_ID_SIZE);
+            if (paradox.decoder.feed(codec, val)) {
+                memcpy(data, paradox.get_data(codec), paradox.data_size);
                 ok = true;
                 break;
             }
@@ -67,9 +67,6 @@ bool paradox_read(uint8_t *data, uint32_t timeout_ms) {
     uninit_paradox_hw();
     cb_free(&cb);
 
-    if (codec->modem) {
-        fsk_free(codec->modem);
-    }
-    free(codec);
+    paradox.free(codec);
     return ok;
 }

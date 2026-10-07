@@ -4,7 +4,6 @@
 
 #include "rfid_main.h"
 #include "tag_emulation.h"
-#include "protocols/paradox.h"
 
 #define LF_EM410X_TAG_ID_SIZE 5
 #define LF_EM410X_ELECTRA_TAG_ID_SIZE 13
@@ -14,6 +13,7 @@
 #define LF_PAC_TAG_ID_SIZE 8
 #define LF_JABLOTRON_TAG_ID_SIZE 5
 #define LF_IDTECK_TAG_ID_SIZE 8
+#define LF_PARADOX_TAG_ID_SIZE 12
 
 void lf_tag_125khz_sense_switch(bool enable);
 int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer);

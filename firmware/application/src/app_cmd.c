@@ -1040,6 +1040,32 @@ static data_frame_tx_t *cmd_processor_jablotron_write_to_t55xx(uint16_t cmd, uin
     return data_frame_make(cmd, status, 0, NULL);
 }
 
+static data_frame_tx_t *cmd_processor_paradox_scan(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    (void)data;
+    (void)length;
+    uint8_t raw[LF_PARADOX_TAG_ID_SIZE] = {0};
+    status = scan_paradox(raw);
+    if (status != STATUS_LF_TAG_OK) {
+        return data_frame_make(cmd, status, 0, NULL);
+    }
+    return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(raw), raw);
+}
+
+static data_frame_tx_t *cmd_processor_paradox_write_to_t55xx(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    typedef struct {
+        uint8_t raw[LF_PARADOX_TAG_ID_SIZE];
+        uint8_t new_key[4];
+        uint8_t old_keys[4];
+    } PACKED payload_t;
+    payload_t *payload = (payload_t *)data;
+    if (length < sizeof(payload_t) || (length - offsetof(payload_t, old_keys)) % sizeof(payload->old_keys) != 0) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint8_t old_cnt = (uint8_t)((length - offsetof(payload_t, old_keys)) / sizeof(payload->old_keys));
+    status = write_paradox_to_t55xx(payload->raw, payload->new_key, payload->old_keys, old_cnt);
+    return data_frame_make(cmd, status, 0, NULL);
+}
+
 static data_frame_tx_t *cmd_processor_lf_t55xx_write(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     typedef struct {
         uint8_t block;    /* block number */
@@ -1497,36 +1523,6 @@ static data_frame_tx_t *cmd_processor_paradox_encode_fc_cn(uint16_t cmd, uint16_
     }
     return data_frame_make(cmd, STATUS_SUCCESS, (uint16_t)sizeof(raw), raw);
 }
-
-#if defined(PROJECT_CHAMELEON_ULTRA)
-
-static data_frame_tx_t *cmd_processor_paradox_scan(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    (void)data;
-    (void)length;
-    uint8_t raw[LF_PARADOX_TAG_ID_SIZE] = {0};
-    status = scan_paradox(raw);
-    if (status != STATUS_LF_TAG_OK) {
-        return data_frame_make(cmd, status, 0, NULL);
-    }
-    return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(raw), raw);
-}
-
-static data_frame_tx_t *cmd_processor_paradox_write_to_t55xx(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
-    typedef struct {
-        uint8_t raw[LF_PARADOX_TAG_ID_SIZE];
-        uint8_t new_key[4];
-        uint8_t old_keys[4];
-    } PACKED payload_t;
-    payload_t *payload = (payload_t *)data;
-    if (length < sizeof(payload_t) || (length - offsetof(payload_t, old_keys)) % sizeof(payload->old_keys) != 0) {
-        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
-    }
-    uint8_t old_cnt = (uint8_t)((length - offsetof(payload_t, old_keys)) / sizeof(payload->old_keys));
-    status = write_paradox_to_t55xx(payload->raw, payload->new_key, payload->old_keys, old_cnt);
-    return data_frame_make(cmd, status, 0, NULL);
-}
-
-#endif
 
 static data_frame_tx_t *cmd_processor_paradox_set_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
     if (length != LF_PARADOX_TAG_ID_SIZE) {
@@ -3342,6 +3338,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_PAC_WRITE_TO_T55XX,           before_reader_run,           cmd_processor_pac_write_to_t55xx,            NULL                   },
     {    DATA_CMD_JABLOTRON_SCAN,               before_reader_run,           cmd_processor_jablotron_scan,                NULL                   },
     {    DATA_CMD_JABLOTRON_WRITE_TO_T55XX,     before_reader_run,           cmd_processor_jablotron_write_to_t55xx,      NULL                   },
+    {    DATA_CMD_PARADOX_SCAN,                 before_reader_run,           cmd_processor_paradox_scan,                  NULL                   },
+    {    DATA_CMD_PARADOX_WRITE_TO_T55XX,       before_reader_run,           cmd_processor_paradox_write_to_t55xx,        NULL                   },
     {    DATA_CMD_IDTECK_WRITE_TO_T55XX,        before_reader_run,           cmd_processor_idteck_write_to_t55xx,         NULL                   },
     {    DATA_CMD_LF_T55XX_WRITE,               before_reader_run,           cmd_processor_lf_t55xx_write,                NULL                   },
     {    DATA_CMD_ADC_GENERIC_READ,             before_reader_run,           cmd_processor_generic_read,                  NULL                   },
@@ -3354,8 +3352,6 @@ static cmd_data_map_t m_data_cmd_map[] = {
 
     {    DATA_CMD_IOPROX_DECODE_RAW,            NULL,                        cmd_processor_ioprox_decode_raw,             NULL                   },
     {    DATA_CMD_IOPROX_COMPOSE_ID,            NULL,                        cmd_processor_ioprox_compose_id,             NULL                   },
-    {    DATA_CMD_PARADOX_SCAN,                 before_reader_run,           cmd_processor_paradox_scan,                  NULL                   },
-    {    DATA_CMD_PARADOX_WRITE_TO_T55XX,       before_reader_run,           cmd_processor_paradox_write_to_t55xx,        NULL                   },
     {    DATA_CMD_EM4X05_SCAN,                  before_reader_run,           cmd_processor_em4x05_scan,                   NULL                   },
     {    DATA_CMD_LF_SNIFF,                     before_reader_run,           cmd_processor_lf_sniff,                      NULL                   },
     {    DATA_CMD_HF14A_SNIFF,                  NULL,                        cmd_processor_hf14a_sniff,                   NULL                   },

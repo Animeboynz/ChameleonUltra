@@ -4,7 +4,8 @@
 #include <string.h>
 
 #include "hex_utils.h"
-#include "protocols/t55xx.h"
+#include "t55xx.h"
+#include "tag_base_type.h"
 
 #define LF_FSK2a_PWM_LO_FREQ_LOOP (5)
 #define LF_FSK2a_PWM_LO_FREQ_TOP_VALUE (10)
@@ -88,7 +89,7 @@ static uint8_t paradox_get_paradox_bits(uint32_t fc, uint32_t cn, uint32_t *bloc
     return crc;
 }
 
-bool paradox_encode_fc_cn(uint32_t fc, uint32_t cn, uint8_t raw12[LF_PARADOX_TAG_ID_SIZE]) {
+bool paradox_encode_fc_cn(uint32_t fc, uint32_t cn, uint8_t raw12[PARADOX_DATA_SIZE]) {
     if (fc > 999u || cn > 99999u) {
         return false;
     }
@@ -100,7 +101,28 @@ bool paradox_encode_fc_cn(uint32_t fc, uint32_t cn, uint8_t raw12[LF_PARADOX_TAG
     return true;
 }
 
-void paradox_decoder_start(paradox_codec_t *d) {
+static paradox_codec *paradox_codec_alloc(void) {
+    paradox_codec *d = calloc(1, sizeof(paradox_codec));
+    if (d == NULL) {
+        return NULL;
+    }
+    d->modem = fsk_alloc(FSK_BITRATE_HID);
+    return d;
+}
+
+static void paradox_codec_free(paradox_codec *d) {
+    if (d == NULL) {
+        return;
+    }
+    if (d->modem) {
+        fsk_free(d->modem);
+        d->modem = NULL;
+    }
+    free(d);
+}
+
+static void paradox_decoder_start(paradox_codec *d, uint8_t format) {
+    (void)format;
     memset(d->data, 0, sizeof(d->data));
     d->pre = 0;
     d->st = PARADOX_DEC_WAIT;
@@ -110,7 +132,7 @@ void paradox_decoder_start(paradox_codec_t *d) {
     }
 }
 
-bool paradox_decoder_feed(paradox_codec_t *d, uint16_t val) {
+static bool paradox_decoder_feed(paradox_codec *d, uint16_t val) {
     bool bit = false;
     if (!fsk_feed(d->modem, val, &bit)) {
         return false;
@@ -159,11 +181,11 @@ bool paradox_decoder_feed(paradox_codec_t *d, uint16_t val) {
     return false;
 }
 
-uint8_t *paradox_get_data(paradox_codec_t *d) {
+static uint8_t *paradox_get_data(paradox_codec *d) {
     return d->data;
 }
 
-const nrf_pwm_sequence_t *paradox_modulator(paradox_codec_t *d, uint8_t *buf) {
+static const nrf_pwm_sequence_t *paradox_modulator(paradox_codec *d, uint8_t *buf) {
     (void)d;
     int k = 0;
     for (int i = 0; i < PARADOX_RAW_BITS; i++) {
@@ -186,7 +208,21 @@ const nrf_pwm_sequence_t *paradox_modulator(paradox_codec_t *d, uint8_t *buf) {
     return &m_paradox_pwm_seq;
 }
 
-uint8_t paradox_t55xx_writer(uint8_t raw12[LF_PARADOX_TAG_ID_SIZE], uint32_t *blks) {
+const protocol paradox = {
+    .tag_type = TAG_TYPE_PARADOX,
+    .data_size = PARADOX_DATA_SIZE,
+    .alloc = (codec_alloc)paradox_codec_alloc,
+    .free = (codec_free)paradox_codec_free,
+    .get_data = (codec_get_data)paradox_get_data,
+    .modulator = (modulator)paradox_modulator,
+    .decoder =
+        {
+            .start = (decoder_start)paradox_decoder_start,
+            .feed = (decoder_feed)paradox_decoder_feed,
+        },
+};
+
+uint8_t paradox_t55xx_writer(uint8_t *raw12, uint32_t *blks) {
     blks[0] = T5577_PARADOX_CONFIG;
     blks[1] = (uint32_t)bytes_to_num(raw12, 4);
     blks[2] = (uint32_t)bytes_to_num(raw12 + 4, 4);

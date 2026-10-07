@@ -6,8 +6,8 @@
 #    You can ignore this file modify.
 # Warning: your toolchain path not allow PR to public repo!!!
 # If you need define the toolchain path, plz delete annotate and change it.
-#GNU_INSTALL_ROOT ?= /your/toolchain/path/
-#GNU_VERSION ?= 8.8.8
+GNU_INSTALL_ROOT ?= C:/Program Files (x86)/GNU Arm Embedded Toolchain/10 2021.10/bin/
+GNU_VERSION ?= 10.3.1
 #GNU_PREFIX ?= arm-none-eabi
 
 

@@ -713,3 +713,9 @@ software/script/nonces.bin
 firmware/compile_commands.json
 firmware/application/compile_commands.json
 software/src/target_arch_detect.c
+firmware/application/.idea/workspace.xml
+firmware/application/.idea/modules.xml
+firmware/application/.idea/misc.xml
+firmware/application/.idea/application.iml
+firmware/Makefile.defs
+firmware/Makefile.defs
