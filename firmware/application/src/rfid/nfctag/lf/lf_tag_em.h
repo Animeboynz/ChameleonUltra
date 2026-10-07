@@ -4,6 +4,7 @@
 
 #include "rfid_main.h"
 #include "tag_emulation.h"
+#include "protocols/paradox.h"
 
 #define LF_EM410X_TAG_ID_SIZE 5
 #define LF_EM410X_ELECTRA_TAG_ID_SIZE 13
@@ -30,4 +31,6 @@ int lf_tag_jablotron_data_savecb(tag_specific_type_t type, tag_data_buffer_t *bu
 bool lf_tag_jablotron_data_factory(uint8_t slot, tag_specific_type_t tag_type);
 int lf_tag_idteck_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
 bool lf_tag_idteck_data_factory(uint8_t slot, tag_specific_type_t tag_type);
+int lf_tag_paradox_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
+bool lf_tag_paradox_data_factory(uint8_t slot, tag_specific_type_t tag_type);
 bool is_lf_field_exists(void);

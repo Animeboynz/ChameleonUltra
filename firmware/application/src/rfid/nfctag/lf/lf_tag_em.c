@@ -270,6 +270,15 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         return LF_PAC_TAG_ID_SIZE;
     }
 
+    if (type == TAG_TYPE_PARADOX && buffer->length >= LF_PARADOX_TAG_ID_SIZE) {
+        m_tag_type = type;
+        paradox_codec_t tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        m_pwm_seq = paradox_modulator(&tmp, buffer->buffer);
+        NRF_LOG_INFO("load lf paradox data finish.");
+        return LF_PARADOX_TAG_ID_SIZE;
+    }
+
     if (type == TAG_TYPE_JABLOTRON && buffer->length >= LF_JABLOTRON_TAG_ID_SIZE) {
         m_tag_type = type;
         void *codec = jablotron.alloc();
@@ -444,4 +453,17 @@ bool lf_tag_idteck_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
         0xDE, 0xAD, 0xBE, 0xEF,   // default card data
     };
     return lf_tag_data_factory(slot, tag_type, tag_id, sizeof(tag_id));
+}
+
+int lf_tag_paradox_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
+    (void)type;
+    (void)buffer;
+    return m_tag_type == TAG_TYPE_PARADOX ? LF_PARADOX_TAG_ID_SIZE : 0;
+}
+
+bool lf_tag_paradox_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
+    static const uint8_t tag_id[LF_PARADOX_TAG_ID_SIZE] = {
+        0x0f, 0x55, 0x55, 0x56, 0x95, 0x59, 0x6a, 0x6a, 0x99, 0x99, 0xa5, 0x9a,
+    };
+    return lf_tag_data_factory(slot, tag_type, (uint8_t *)tag_id, sizeof(tag_id));
 }

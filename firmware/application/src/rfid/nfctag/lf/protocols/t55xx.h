@@ -63,6 +63,11 @@ extern "C" {
     T5577_PWD |                \
     (3 << T5577_MAXBLOCK_SHIFT))
 
+#define T5577_PARADOX_CONFIG ( \
+    T5577_BITRATE_RF_50 |       \
+    T5577_MODULATION_FSK2a |   \
+    (3 << T5577_MAXBLOCK_SHIFT))
+
 #define T5577_IOPROX_CONFIG ( \
     T5577_BITRATE_RF_64 |      \
     T5577_MODULATION_FSK2a |   \

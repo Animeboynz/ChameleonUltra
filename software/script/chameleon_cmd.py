@@ -734,6 +734,45 @@ class ChameleonCMD:
             resp.parsed = struct.unpack(">BBH8sBBBB", resp.data[:16])
         return resp
 
+    @expect_response(Status.SUCCESS)
+    def paradox_encode_fc_cn(self, fc: int, cn: int):
+        """Encode Paradox FC (<=999) and card number (<=99999) to 12 raw bytes (Proxmark3-compatible)."""
+        payload = struct.pack("!HI", fc & 0xFFFF, cn & 0xFFFFFFFF)
+        resp = self.device.send_cmd_sync(Command.PARADOX_ENCODE_FC_CN, data=payload)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = resp.data[:12]
+        return resp
+
+    @expect_response(Status.LF_TAG_OK)
+    def paradox_scan(self):
+        resp = self.device.send_cmd_sync(Command.PARADOX_SCAN)
+        if resp.status == Status.LF_TAG_OK:
+            resp.parsed = resp.data[:12]
+        return resp
+
+    @expect_response(Status.LF_TAG_OK)
+    def paradox_write_to_t55xx(self, raw12: bytes, new_key: bytes, old_keys: tuple = ()):
+        if len(raw12) != 12:
+            raise ValueError("Paradox raw data must be 12 bytes")
+        if len(new_key) != 4:
+            raise ValueError("new_key must be 4 bytes")
+        fmt = f"!12s4s{4 * len(old_keys)}s"
+        data = struct.pack(fmt, raw12, new_key, b"".join(old_keys))
+        return self.device.send_cmd_sync(Command.PARADOX_WRITE_TO_T55XX, data)
+
+    @expect_response(Status.SUCCESS)
+    def paradox_set_emu_id(self, raw12: bytes):
+        if len(raw12) != 12:
+            raise ValueError("Paradox raw data must be 12 bytes")
+        return self.device.send_cmd_sync(Command.PARADOX_SET_EMU_ID, data=raw12)
+
+    @expect_response(Status.SUCCESS)
+    def paradox_get_emu_id(self):
+        resp = self.device.send_cmd_sync(Command.PARADOX_GET_EMU_ID)
+        if resp.status == Status.SUCCESS and resp.data:
+            resp.parsed = resp.data[:12]
+        return resp
+
     def lf_sniff(self, timeout_ms: int = 2000):
         """
         Capture raw LF field ADC samples.
