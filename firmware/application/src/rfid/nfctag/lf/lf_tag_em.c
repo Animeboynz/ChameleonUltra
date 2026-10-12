@@ -9,6 +9,7 @@
 #include "nrfx_lpcomp.h"
 #include "nrfx_pwm.h"
 #include "protocols/em410x.h"
+#include "protocols/gallagher.h"
 #include "protocols/hidprox.h"
 #include "protocols/idteck.h"
 #include "protocols/ioprox.h"
@@ -280,6 +281,15 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         return LF_PARADOX_TAG_ID_SIZE;
     }
 
+    if (type == TAG_TYPE_GALLAGHER && buffer->length >= LF_GALLAGHER_TAG_ID_SIZE) {
+        m_tag_type = type;
+        void *codec = gallagher.alloc();
+        m_pwm_seq = gallagher.modulator(codec, buffer->buffer);
+        gallagher.free(codec);
+        NRF_LOG_INFO("load lf gallagher data finish.");
+        return LF_GALLAGHER_TAG_ID_SIZE;
+    }
+
     if (type == TAG_TYPE_JABLOTRON && buffer->length >= LF_JABLOTRON_TAG_ID_SIZE) {
         m_tag_type = type;
         void *codec = jablotron.alloc();
@@ -465,6 +475,20 @@ int lf_tag_paradox_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buff
 bool lf_tag_paradox_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
     static const uint8_t tag_id[LF_PARADOX_TAG_ID_SIZE] = {
         0x0f, 0x55, 0x55, 0x56, 0x95, 0x59, 0x6a, 0x6a, 0x99, 0x99, 0xa5, 0x9a,
+    };
+    return lf_tag_data_factory(slot, tag_type, (uint8_t *)tag_id, sizeof(tag_id));
+}
+
+int lf_tag_gallagher_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
+    (void)type;
+    (void)buffer;
+    return m_tag_type == TAG_TYPE_GALLAGHER ? LF_GALLAGHER_TAG_ID_SIZE : 0;
+}
+
+bool lf_tag_gallagher_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
+    // Region A (0), facility 9876, card 1234, issue 1.
+    static const uint8_t tag_id[LF_GALLAGHER_TAG_ID_SIZE] = {
+        0x7f, 0xea, 0xa3, 0x4b, 0xa4, 0xcb, 0x5a, 0x34, 0x06, 0x8c, 0x92, 0x2b,
     };
     return lf_tag_data_factory(slot, tag_type, (uint8_t *)tag_id, sizeof(tag_id));
 }

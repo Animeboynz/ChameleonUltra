@@ -110,6 +110,9 @@ class Command(enum.IntEnum):
     PARADOX_SCAN = 3021
     PARADOX_WRITE_TO_T55XX = 3022
     PARADOX_ENCODE_FC_CN = 3023
+    GALLAGHER_SCAN = 3024
+    GALLAGHER_WRITE_TO_T55XX = 3025
+    GALLAGHER_ENCODE = 3026
 
     MF1_WRITE_EMU_BLOCK_DATA = 4000
     HF14A_SET_ANTI_COLL_DATA = 4001
@@ -188,6 +191,8 @@ class Command(enum.IntEnum):
     IDTECK_GET_EMU_ID = 5013
     PARADOX_SET_EMU_ID = 5014
     PARADOX_GET_EMU_ID = 5015
+    GALLAGHER_SET_EMU_ID = 5016
+    GALLAGHER_GET_EMU_ID = 5017
     EM4X05_SCAN = 3030
     EM4X05_READSNIFF = 3032
     LF_SNIFF = 3031
@@ -323,6 +328,7 @@ class TagSpecificType(enum.IntEnum):
     # FDX-B
     # securakey
     # gallagher
+    Gallagher = 105
     # PAC/Stanley
     PAC = 150
     # Presco
@@ -417,6 +423,8 @@ class TagSpecificType(enum.IntEnum):
             return "EM410X/64"
         elif self == TagSpecificType.EM410X_ELECTRA:
             return "EM410X Electra"
+        elif self == TagSpecificType.Gallagher:
+            return "Gallagher"
         elif self == TagSpecificType.HIDProx:
             return "HIDProx"
         elif self == TagSpecificType.ioProx:

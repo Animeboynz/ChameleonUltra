@@ -14,6 +14,7 @@
 #include "settings.h"
 #include "delayed_reset.h"
 #include "netdata.h"
+#include "protocols/gallagher.h"
 #include "protocols/paradox.h"
 #if defined(PROJECT_CHAMELEON_ULTRA)
 #include "bsp_wdt.h"
@@ -1542,6 +1543,71 @@ static data_frame_tx_t *cmd_processor_paradox_get_emu_id(uint16_t cmd, uint16_t 
     }
     tag_data_buffer_t *buffer = get_buffer_by_tag_type(TAG_TYPE_PARADOX);
     return data_frame_make(cmd, STATUS_SUCCESS, LF_PARADOX_TAG_ID_SIZE, buffer->buffer);
+}
+
+static data_frame_tx_t *cmd_processor_gallagher_scan(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    (void)data;
+    (void)length;
+    uint8_t raw[LF_GALLAGHER_TAG_ID_SIZE] = {0};
+    status = scan_gallagher(raw);
+    if (status != STATUS_LF_TAG_OK) {
+        return data_frame_make(cmd, status, 0, NULL);
+    }
+    return data_frame_make(cmd, STATUS_LF_TAG_OK, sizeof(raw), raw);
+}
+
+static data_frame_tx_t *cmd_processor_gallagher_write_to_t55xx(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    typedef struct {
+        uint8_t raw[LF_GALLAGHER_TAG_ID_SIZE];
+        uint8_t new_key[4];
+        uint8_t old_keys[4];
+    } PACKED payload_t;
+    payload_t *payload = (payload_t *)data;
+    if (length < sizeof(payload_t) || (length - offsetof(payload_t, old_keys)) % sizeof(payload->old_keys) != 0) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint8_t old_cnt = (uint8_t)((length - offsetof(payload_t, old_keys)) / sizeof(payload->old_keys));
+    status = write_gallagher_to_t55xx(payload->raw, payload->new_key, payload->old_keys, old_cnt);
+    return data_frame_make(cmd, status, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_gallagher_encode(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    (void)status;
+    if (length != 7) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    uint8_t region = data[0];
+    uint16_t facility = (uint16_t)(((uint16_t)data[1] << 8) | data[2]);
+    uint32_t card = ((uint32_t)data[3] << 16) | ((uint32_t)data[4] << 8) | data[5];
+    uint8_t issue = data[6];
+    uint8_t raw[LF_GALLAGHER_TAG_ID_SIZE];
+    if (!gallagher_encode_creds(region, facility, card, issue, raw)) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    return data_frame_make(cmd, STATUS_SUCCESS, (uint16_t)sizeof(raw), raw);
+}
+
+static data_frame_tx_t *cmd_processor_gallagher_set_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    (void)status;
+    if (length != LF_GALLAGHER_TAG_ID_SIZE) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, NULL);
+    }
+    tag_data_buffer_t *buffer = get_buffer_by_tag_type(TAG_TYPE_GALLAGHER);
+    memcpy(buffer->buffer, data, LF_GALLAGHER_TAG_ID_SIZE);
+    tag_emulation_load_by_buffer(TAG_TYPE_GALLAGHER, false);
+    return data_frame_make(cmd, STATUS_SUCCESS, 0, NULL);
+}
+
+static data_frame_tx_t *cmd_processor_gallagher_get_emu_id(uint16_t cmd, uint16_t status, uint16_t length, uint8_t *data) {
+    (void)status;
+    (void)length;
+    tag_slot_specific_type_t tag_types;
+    tag_emulation_get_specific_types_by_slot(tag_emulation_get_slot(), &tag_types);
+    if (tag_types.tag_lf != TAG_TYPE_GALLAGHER) {
+        return data_frame_make(cmd, STATUS_PAR_ERR, 0, data);
+    }
+    tag_data_buffer_t *buffer = get_buffer_by_tag_type(TAG_TYPE_GALLAGHER);
+    return data_frame_make(cmd, STATUS_SUCCESS, LF_GALLAGHER_TAG_ID_SIZE, buffer->buffer);
 }
 
 static nfc_tag_14a_coll_res_reference_t *get_coll_res_data(bool write) {
@@ -3340,6 +3406,8 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_JABLOTRON_WRITE_TO_T55XX,     before_reader_run,           cmd_processor_jablotron_write_to_t55xx,      NULL                   },
     {    DATA_CMD_PARADOX_SCAN,                 before_reader_run,           cmd_processor_paradox_scan,                  NULL                   },
     {    DATA_CMD_PARADOX_WRITE_TO_T55XX,       before_reader_run,           cmd_processor_paradox_write_to_t55xx,        NULL                   },
+    {    DATA_CMD_GALLAGHER_SCAN,               before_reader_run,           cmd_processor_gallagher_scan,                NULL                   },
+    {    DATA_CMD_GALLAGHER_WRITE_TO_T55XX,     before_reader_run,           cmd_processor_gallagher_write_to_t55xx,      NULL                   },
     {    DATA_CMD_IDTECK_WRITE_TO_T55XX,        before_reader_run,           cmd_processor_idteck_write_to_t55xx,         NULL                   },
     {    DATA_CMD_LF_T55XX_WRITE,               before_reader_run,           cmd_processor_lf_t55xx_write,                NULL                   },
     {    DATA_CMD_ADC_GENERIC_READ,             before_reader_run,           cmd_processor_generic_read,                  NULL                   },
@@ -3419,6 +3487,9 @@ static cmd_data_map_t m_data_cmd_map[] = {
     {    DATA_CMD_PARADOX_ENCODE_FC_CN,           NULL,                      cmd_processor_paradox_encode_fc_cn,          NULL                   },
     {    DATA_CMD_PARADOX_SET_EMU_ID,             NULL,                      cmd_processor_paradox_set_emu_id,            NULL                   },
     {    DATA_CMD_PARADOX_GET_EMU_ID,             NULL,                      cmd_processor_paradox_get_emu_id,            NULL                   },
+    {    DATA_CMD_GALLAGHER_ENCODE,               NULL,                      cmd_processor_gallagher_encode,              NULL                   },
+    {    DATA_CMD_GALLAGHER_SET_EMU_ID,           NULL,                      cmd_processor_gallagher_set_emu_id,          NULL                   },
+    {    DATA_CMD_GALLAGHER_GET_EMU_ID,           NULL,                      cmd_processor_gallagher_get_emu_id,          NULL                   },
 
     {    DATA_CMD_SEOS_READ_EMU_DATA,             NULL,                      cmd_processor_seos_read_emu_data,            NULL                   },
     {    DATA_CMD_SEOS_WRITE_EMU_DATA,            NULL,                      cmd_processor_seos_write_emu_data,           NULL                   },

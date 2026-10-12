@@ -122,6 +122,9 @@
 #define DATA_CMD_PARADOX_SCAN                   (3021)
 #define DATA_CMD_PARADOX_WRITE_TO_T55XX         (3022)
 #define DATA_CMD_PARADOX_ENCODE_FC_CN           (3023)
+#define DATA_CMD_GALLAGHER_SCAN                 (3024)
+#define DATA_CMD_GALLAGHER_WRITE_TO_T55XX       (3025)
+#define DATA_CMD_GALLAGHER_ENCODE               (3026)
 
 //
 // ******************************************************************
@@ -213,6 +216,8 @@
 #define DATA_CMD_IDTECK_GET_EMU_ID              (5013)
 #define DATA_CMD_PARADOX_SET_EMU_ID             (5014)
 #define DATA_CMD_PARADOX_GET_EMU_ID             (5015)
+#define DATA_CMD_GALLAGHER_SET_EMU_ID           (5016)
+#define DATA_CMD_GALLAGHER_GET_EMU_ID           (5017)
 
 #define DATA_CMD_EM4X05_SCAN                    (3030)
 #define DATA_CMD_EM4X05_READSNIFF               (3032)

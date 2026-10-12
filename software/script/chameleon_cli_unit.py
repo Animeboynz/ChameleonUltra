@@ -778,6 +778,28 @@ class LFParadoxIdArgsUnit(DeviceRequiredUnit):
         raise NotImplementedError("Please implement this")
 
 
+class LFGallagherIdArgsUnit(DeviceRequiredUnit):
+    @staticmethod
+    def add_card_arg(parser: ArgumentParserNoExit, required=False):
+        parser.add_argument(
+            "--id", type=str, required=required, help="Gallagher raw id (12 bytes hex)", metavar="<hex>"
+        )
+        return parser
+
+    def before_exec(self, args: argparse.Namespace):
+        if not super().before_exec(args):
+            return False
+        if args.id is None or not re.match(r"^[a-fA-F0-9]{24}$", args.id):
+            raise ArgsParserError("ID must include 24 HEX symbols (12 bytes)")
+        return True
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        raise NotImplementedError("Please implement this")
+
+    def on_exec(self, args: argparse.Namespace):
+        raise NotImplementedError("Please implement this")
+
+
 IDTECK_PREAMBLE_HEX = "4944544B"
 IDTECK_PREAMBLE_INT = 0x4944544B
 
@@ -933,6 +955,7 @@ lf_pac = lf.subgroup("pac", "PAC/Stanley commands")
 lf_viking = lf.subgroup("viking", "Viking commands")
 lf_jablotron = lf.subgroup("jablotron", "Jablotron commands")
 lf_paradox = lf.subgroup("paradox", "Paradox commands")
+lf_gallagher = lf.subgroup("gallagher", "Gallagher commands")
 lf_generic = lf.subgroup("generic", "Generic commands")
 lf_idteck = lf.subgroup("idteck", "IDTECK commands")
 
@@ -6901,6 +6924,9 @@ class HWSlotList(DeviceRequiredUnit):
                 if lf_tag_type == TagSpecificType.Paradox:
                     id = self.cmd.paradox_get_emu_id()
                     print(f"      {'ID:':40}{color_string((CY, id.hex().upper()))}")
+                if lf_tag_type == TagSpecificType.Gallagher:
+                    id = self.cmd.gallagher_get_emu_id()
+                    print(f"      {'ID:':40}{color_string((CY, id.hex().upper()))}")
                 if lf_tag_type == TagSpecificType.PAC:
                     id = self.cmd.pac_get_emu_id()
                     id_ascii = ''.join(chr(b) if 0x20 <= b < 0x7f else '.' for b in id)
@@ -7238,6 +7264,88 @@ class LFParadoxEconfig(SlotIndexArgsAndGoUnit, LFParadoxIdArgsUnit):
         else:
             response = self.cmd.paradox_get_emu_id()
             print(" - Get Paradox tag id success.")
+            print(f"ID: {response.hex().upper()}")
+
+
+@lf_gallagher.command("read")
+class LFGallagherRead(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Scan a Gallagher tag and print the 12-byte wire image"
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        raw = self.cmd.gallagher_scan()
+        print(f" Gallagher ID: {color_string((CG, raw.hex().upper()))}")
+
+
+@lf_gallagher.command("write")
+class LFGallagherWriteT55xx(LFGallagherIdArgsUnit, ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Write a Gallagher 12-byte wire image to a T5577"
+        return self.add_card_arg(parser, required=True)
+
+    def on_exec(self, args: argparse.Namespace):
+        raw = bytes.fromhex(args.id)
+        self.cmd.gallagher_write_to_t55xx(raw)
+        print(f" - Gallagher ID: {args.id.upper()} write done.")
+
+
+@lf_gallagher.command("encode")
+class LFGallagherEncode(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Encode Gallagher region, facility, card number and issue level"
+        parser.add_argument("--rc", type=int, required=True, help="Region code (0-15)")
+        parser.add_argument("--fc", type=int, required=True, help="Facility code (0-65535)")
+        parser.add_argument("--cn", type=int, required=True, help="Card number (0-16777215)")
+        parser.add_argument("--il", type=int, required=True, help="Issue level (0-15)")
+        return parser
+
+    def before_exec(self, args: argparse.Namespace):
+        if not super().before_exec(args):
+            return False
+        if args.rc < 0 or args.rc > 15:
+            raise ArgsParserError("Region code must be between 0 and 15")
+        if args.fc < 0 or args.fc > 65535:
+            raise ArgsParserError("Facility code must be between 0 and 65535")
+        if args.cn < 0 or args.cn > 16777215:
+            raise ArgsParserError("Card number must be between 0 and 16777215")
+        if args.il < 0 or args.il > 15:
+            raise ArgsParserError("Issue level must be between 0 and 15")
+        return True
+
+    def on_exec(self, args: argparse.Namespace):
+        raw = self.cmd.gallagher_encode(args.rc, args.fc, args.cn, args.il)
+        print(f" Region: {args.rc}")
+        print(f" Facility: {args.fc}")
+        print(f" Card: {args.cn}")
+        print(f" Issue: {args.il}")
+        print(f" Raw: {color_string((CG, raw.hex().upper()))}")
+
+
+@lf_gallagher.command("econfig")
+class LFGallagherEconfig(SlotIndexArgsAndGoUnit, LFGallagherIdArgsUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Set the emulated Gallagher card id"
+        self.add_slot_args(parser)
+        self.add_card_arg(parser)
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        if args.id is not None:
+            slotinfo = self.cmd.get_slot_info()
+            selected = SlotNumber.from_fw(self.cmd.get_active_slot())
+            lf_tag_type = TagSpecificType(slotinfo[selected - 1]["lf"])
+            if lf_tag_type != TagSpecificType.Gallagher:
+                print(f"{color_string((CR, 'WARNING'))}: Slot type not set to Gallagher.")
+            self.cmd.gallagher_set_emu_id(bytes.fromhex(args.id))
+            print(" - Set Gallagher tag id success.")
+        else:
+            response = self.cmd.gallagher_get_emu_id()
+            print(" - Get Gallagher tag id success.")
             print(f"ID: {response.hex().upper()}")
 
 

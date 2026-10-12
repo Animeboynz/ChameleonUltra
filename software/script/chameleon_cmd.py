@@ -776,6 +776,45 @@ class ChameleonCMD:
             resp.parsed = resp.data[:12]
         return resp
 
+    @expect_response(Status.SUCCESS)
+    def gallagher_encode(self, region: int, facility: int, card: int, issue: int):
+        """Encode Gallagher region/facility/card/issue to the 12-byte wire image."""
+        payload = struct.pack("!BH3sB", region & 0xFF, facility & 0xFFFF, (card & 0xFFFFFF).to_bytes(3, "big"), issue & 0xFF)
+        resp = self.device.send_cmd_sync(Command.GALLAGHER_ENCODE, data=payload)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = resp.data[:12]
+        return resp
+
+    @expect_response(Status.LF_TAG_OK)
+    def gallagher_scan(self):
+        resp = self.device.send_cmd_sync(Command.GALLAGHER_SCAN)
+        if resp.status == Status.LF_TAG_OK:
+            resp.parsed = resp.data[:12]
+        return resp
+
+    @expect_response(Status.LF_TAG_OK)
+    def gallagher_write_to_t55xx(self, id_bytes: bytes, new_key: bytes = b"\x00\x00\x00\x00", old_keys=None):
+        """Write a 12-byte Gallagher wire image to a T5577."""
+        if len(id_bytes) != 12:
+            raise ValueError("Gallagher raw data must be 12 bytes")
+        if old_keys is None:
+            old_keys = [b"\x00\x00\x00\x00"]
+        data = struct.pack(f"!12s4s{4 * len(old_keys)}s", id_bytes, new_key, b"".join(old_keys))
+        return self.device.send_cmd_sync(Command.GALLAGHER_WRITE_TO_T55XX, data)
+
+    @expect_response(Status.SUCCESS)
+    def gallagher_set_emu_id(self, raw12: bytes):
+        if len(raw12) != 12:
+            raise ValueError("Gallagher raw data must be 12 bytes")
+        return self.device.send_cmd_sync(Command.GALLAGHER_SET_EMU_ID, data=raw12)
+
+    @expect_response(Status.SUCCESS)
+    def gallagher_get_emu_id(self):
+        resp = self.device.send_cmd_sync(Command.GALLAGHER_GET_EMU_ID)
+        if resp.status == Status.SUCCESS and resp.data:
+            resp.parsed = resp.data[:12]
+        return resp
+
     def lf_sniff(self, timeout_ms: int = 2000):
         """
         Capture raw LF field ADC samples.
