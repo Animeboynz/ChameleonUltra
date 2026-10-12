@@ -14,7 +14,7 @@
 #include "nrf_log_default_backends.h"
 NRF_LOG_MODULE_REGISTER();
 
-#define GALLAGHER_BUFFER_SIZE (256)
+#define GALLAGHER_BUFFER_SIZE (1024)
 
 static circular_buffer cb;
 

@@ -23,10 +23,14 @@
 #define GALLAGHER_RAW_BITS (96)
 #define GALLAGHER_T55XX_BLOCK_COUNT (4)
 
+// Rising-edge spacing for RF/32 Manchester, in carrier cycles.
+// 0x20 / 0x30 / 0x40 are one, one-and-a-half, and two bit cells.
+// Accept anything within 12 counts of the nearest cell so a stretched
+// edge is not thrown away. EM410x uses the same half-bin rule.
 #define GALLAGHER_READ_TIME1_BASE (0x20)
 #define GALLAGHER_READ_TIME2_BASE (0x30)
 #define GALLAGHER_READ_TIME3_BASE (0x40)
-#define GALLAGHER_READ_JITTER_TIME_BASE (0x07)
+#define GALLAGHER_READ_MAX_DIST (12)
 
 static nrf_pwm_values_wave_form_t m_gallagher_pwm_seq_vals[GALLAGHER_RAW_BITS] = {};
 
@@ -157,22 +161,25 @@ bool gallagher_encode_creds(uint8_t region, uint16_t facility, uint32_t card, ui
     return true;
 }
 
-static bool gallagher_get_time(uint8_t interval, uint8_t base) {
-    return interval >= (base - GALLAGHER_READ_JITTER_TIME_BASE) &&
-           interval <= (base + GALLAGHER_READ_JITTER_TIME_BASE);
-}
-
 static uint8_t gallagher_period(uint8_t interval) {
-    if (gallagher_get_time(interval, GALLAGHER_READ_TIME1_BASE)) {
-        return 0;
+    const uint8_t centers[3] = {
+        GALLAGHER_READ_TIME1_BASE,
+        GALLAGHER_READ_TIME2_BASE,
+        GALLAGHER_READ_TIME3_BASE,
+    };
+    uint8_t best = 3;
+    int best_dist = GALLAGHER_READ_MAX_DIST + 1;
+    for (int i = 0; i < 3; i++) {
+        int dist = interval - (int)centers[i];
+        if (dist < 0) {
+            dist = -dist;
+        }
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = (uint8_t)i;
+        }
     }
-    if (gallagher_get_time(interval, GALLAGHER_READ_TIME2_BASE)) {
-        return 1;
-    }
-    if (gallagher_get_time(interval, GALLAGHER_READ_TIME3_BASE)) {
-        return 2;
-    }
-    return 3;
+    return best;
 }
 
 static gallagher_codec *gallagher_alloc(void) {
@@ -238,31 +245,74 @@ static bool gallagher_feed_bits(gallagher_codec *d, const bool *bits, int8_t bit
     return false;
 }
 
-static bool gallagher_decoder_feed(gallagher_codec *d, uint16_t interval) {
+static void gallagher_resync(gallagher_codec *d) {
+    memset(d->window, 0, sizeof(d->window));
+    d->n_bits = 0;
+    manchester_reset(d->modem);
+}
+
+// 1 = frame found, 0 = bits consumed, -1 = this interval was not Manchester.
+static int gallagher_consume(gallagher_codec *d, uint8_t interval) {
     bool bits[2] = {0};
-    int8_t bitlen = 0;
+    int8_t bitlen = -1;
+    manchester_feed(d->modem, interval, bits, &bitlen);
+    if (bitlen < 0) {
+        gallagher_resync(d);
+        return -1;
+    }
+    if (gallagher_feed_bits(d, bits, bitlen)) {
+        return 1;
+    }
+    return 0;
+}
 
-    // Same edge-merge workaround as Viking: a missed short gap shows up as one long interval.
-    if (interval > (uint16_t)(GALLAGHER_READ_TIME3_BASE + GALLAGHER_READ_JITTER_TIME_BASE)) {
-        interval = (uint16_t)(interval - GALLAGHER_READ_TIME2_BASE);
-        manchester_feed(d->modem, GALLAGHER_READ_TIME2_BASE, bits, &bitlen);
-        if (bitlen == -1) {
-            memset(d->window, 0, sizeof(d->window));
-            d->n_bits = 0;
-            return false;
+static bool gallagher_decoder_feed(gallagher_codec *d, uint16_t interval) {
+    if (interval > 0xff) {
+        interval = 0xff;
+    }
+    uint8_t iv = (uint8_t)interval;
+
+    if (gallagher_period(iv) != 3) {
+        return gallagher_consume(d, iv) > 0;
+    }
+
+    // A missed comparator edge adds two cells. Peel those; a longer gap is the
+    // pause between repeats, and inventing a bit there leaves the modem out of sync.
+    const uint8_t merged[4] = {80, 96, 112, 128};
+    int near_merge = 0;
+    for (int i = 0; i < 4; i++) {
+        int dist = (int)iv - (int)merged[i];
+        if (dist < 0) {
+            dist = -dist;
         }
-        if (gallagher_feed_bits(d, bits, bitlen)) {
-            return true;
+        if (dist <= GALLAGHER_READ_MAX_DIST) {
+            near_merge = 1;
+            break;
+        }
+    }
+    if (near_merge) {
+        const uint8_t peel[2] = {GALLAGHER_READ_TIME2_BASE, GALLAGHER_READ_TIME3_BASE};
+        for (int i = 0; i < 2; i++) {
+            if (iv <= peel[i]) {
+                continue;
+            }
+            uint8_t rest = (uint8_t)(iv - peel[i]);
+            if (gallagher_period(peel[i]) == 3 || gallagher_period(rest) == 3) {
+                continue;
+            }
+            int rc = gallagher_consume(d, peel[i]);
+            if (rc < 0) {
+                return false;
+            }
+            if (rc > 0) {
+                return true;
+            }
+            return gallagher_consume(d, rest) > 0;
         }
     }
 
-    manchester_feed(d->modem, (uint8_t)interval, bits, &bitlen);
-    if (bitlen == -1) {
-        memset(d->window, 0, sizeof(d->window));
-        d->n_bits = 0;
-        return false;
-    }
-    return gallagher_feed_bits(d, bits, bitlen);
+    gallagher_resync(d);
+    return false;
 }
 
 static const nrf_pwm_sequence_t *gallagher_modulator(gallagher_codec *d, uint8_t *buf) {

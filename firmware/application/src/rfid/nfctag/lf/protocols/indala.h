@@ -13,17 +13,23 @@
 // One carrier-cycle sample per bit-clock tick (RF/32). The sliding window
 // holds a frame plus the long zero run in the preamble.
 #define INDALA_BIT_WINDOW 96
+#define INDALA_CLOCK 32
+#define INDALA_WIN_BYTES (INDALA_BIT_WINDOW / 8)
 
+// Thirty-two bit alignments are tracked together. The SAADC value is a
+// unipolar ripple, so the bit is the sign of a 32-sample correlation with
+// the RF/2 subcarrier, not a per-sample zero crossing.
 typedef struct {
     uint8_t data[INDALA_DATA_SIZE];
-    int32_t mean;
-    int16_t count;
-    uint8_t bits[INDALA_BIT_WINDOW];
-    uint8_t nbits;
-    uint8_t phase;
-    int8_t last_sign;
-    bool seeded;
-    bool locked;
+    uint8_t confirm[INDALA_DATA_SIZE];
+    bool has_confirm;
+    int32_t mean_q8;
+    int32_t run_sum;
+    int32_t hist[INDALA_CLOCK];
+    uint8_t win[INDALA_CLOCK][INDALA_WIN_BYTES];
+    uint8_t nbits[INDALA_CLOCK];
+    uint16_t filled;
+    uint32_t n;
 } indala_codec;
 
 extern const protocol indala;

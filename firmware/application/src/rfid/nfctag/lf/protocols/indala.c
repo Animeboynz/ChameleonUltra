@@ -17,9 +17,10 @@
  * Proxmark3 getIndalaBits() / getIndalaBits4041x() maps.
  *
  * The reader samples the op-amp once per 125 kHz carrier cycle. PSK1 with
- * an RF/2 subcarrier is then an alternating sample pair, and a bit that
- * changes the phase produces two samples of the same sign. That is the
- * waveform Proxmark3 builds in pskSimBit() with carrier 2 and clock 32.
+ * an RF/2 subcarrier is a high/low ripple on that stream. Each bit is the
+ * sign of a 32-sample correlation against that ripple. Proxmark3 builds the
+ * same waveform in pskSimBit() with carrier 2 and clock 32, and the phase
+ * during a bit equals the data bit (either polarity).
  */
 
 #define INDALA_PWM_ENTRIES       (INDALA_BIT_COUNT * LF_PSK1_RF32_SUBCYCLES_PER_BIT)
@@ -35,13 +36,15 @@ static nrf_pwm_sequence_t m_indala_pwm_seq = {
 };
 
 static void indala_decoder_reset(indala_codec *d) {
-    d->mean = 0;
-    d->count = 0;
-    d->nbits = 0;
-    d->phase = 1;
-    d->last_sign = -1;
-    d->seeded = false;
-    d->locked = false;
+    d->mean_q8 = 0;
+    d->run_sum = 0;
+    d->filled = 0;
+    d->n = 0;
+    d->has_confirm = false;
+    memset(d->confirm, 0, sizeof(d->confirm));
+    memset(d->hist, 0, sizeof(d->hist));
+    memset(d->win, 0, sizeof(d->win));
+    memset(d->nbits, 0, sizeof(d->nbits));
 }
 
 static indala_codec *indala_alloc(void) {
@@ -93,82 +96,76 @@ static void indala_pack_frame(indala_codec *d, const uint8_t *bits, uint8_t inve
     }
 }
 
-static bool indala_push_bit(indala_codec *d, uint8_t bit) {
-    if (d->nbits == INDALA_BIT_WINDOW) {
-        memmove(d->bits, d->bits + 1, INDALA_BIT_WINDOW - 1);
-        d->nbits = INDALA_BIT_WINDOW - 1;
+static uint8_t indala_bit_at(const uint8_t *win, int pos) {
+    return (uint8_t)((win[pos / 8] >> (7 - (pos % 8))) & 1u);
+}
+
+// A frame is only returned after the same 8 bytes show up twice. The preamble
+// is the only check, and one noisy alignment can stumble into it.
+static bool indala_accept(indala_codec *d) {
+    if (d->has_confirm && memcmp(d->confirm, d->data, INDALA_DATA_SIZE) == 0) {
+        return true;
     }
-    d->bits[d->nbits++] = bit;
-    if (d->nbits < INDALA_BIT_COUNT) {
+    memcpy(d->confirm, d->data, INDALA_DATA_SIZE);
+    d->has_confirm = true;
+    return false;
+}
+
+static bool indala_push_bit(indala_codec *d, int lane, uint8_t bit) {
+    uint8_t *win = d->win[lane];
+    uint8_t carry = bit;
+    for (int i = INDALA_WIN_BYTES - 1; i >= 0; i--) {
+        uint8_t next = (win[i] & 0x80u) ? 1u : 0u;
+        win[i] = (uint8_t)((win[i] << 1) | carry);
+        carry = next;
+    }
+    if (d->nbits[lane] < INDALA_BIT_WINDOW) {
+        d->nbits[lane]++;
+    }
+    if (d->nbits[lane] < INDALA_BIT_COUNT) {
         return false;
     }
-    for (int start = (int)d->nbits - INDALA_BIT_COUNT; start >= 0; start--) {
-        for (uint8_t invert = 0; invert < 2; invert++) {
-            if (indala_preamble_at(d->bits + start, invert)) {
-                indala_pack_frame(d, d->bits + start, invert);
+
+    // The new bit lands at the end of the window, so only the 64-bit slice
+    // that ends there is new. Older slices were checked on earlier bits.
+    uint8_t frame[INDALA_BIT_COUNT];
+    int start = INDALA_BIT_WINDOW - INDALA_BIT_COUNT;
+    for (int i = 0; i < INDALA_BIT_COUNT; i++) {
+        frame[i] = indala_bit_at(win, start + i);
+    }
+    for (uint8_t invert = 0; invert < 2; invert++) {
+        if (indala_preamble_at(frame, invert)) {
+            indala_pack_frame(d, frame, invert);
+            if (indala_accept(d)) {
                 return true;
             }
         }
     }
-    return false;
-}
-
-// Samples since the last phase change belong to the current phase. A run
-// of N carrier cycles is round(N / 32) copies of that phase.
-static bool indala_emit_run(indala_codec *d) {
-    int nbits = ((int)d->count + 16) / 32;
-    if (nbits <= 0) {
-        return false;
-    }
-    if (nbits > 48) {
-        d->nbits = 0;
-        d->locked = false;
-        return false;
-    }
-    for (int i = 0; i < nbits; i++) {
-        if (indala_push_bit(d, d->phase)) {
-            return true;
-        }
-    }
-    d->phase ^= 1u;
     return false;
 }
 
 static bool indala_decoder_feed(indala_codec *d, uint16_t val) {
-    if (!d->seeded) {
-        d->mean = val;
-        d->seeded = true;
+    int32_t sample = (int16_t)val;
+    if (d->filled == 0 && d->n == 0) {
+        d->mean_q8 = sample << 8;
+    }
+    d->mean_q8 += ((sample << 8) - d->mean_q8) >> 4;
+    int32_t hp = sample - (d->mean_q8 >> 8);
+    int32_t weight = ((d->n & 1u) == 0u) ? hp : -hp;
+
+    uint32_t slot = d->n % INDALA_CLOCK;
+    d->run_sum += weight - d->hist[slot];
+    d->hist[slot] = weight;
+
+    uint32_t n = d->n++;
+    if (d->filled < INDALA_CLOCK) {
+        d->filled++;
         return false;
     }
 
-    d->mean += ((int32_t)val - d->mean) / 16;
-    uint8_t sign = ((int32_t)val >= d->mean) ? 1u : 0u;
-    if (d->last_sign < 0) {
-        d->last_sign = (int8_t)sign;
-        return false;
-    }
-
-    if (sign == (uint8_t)d->last_sign) {
-        if (d->locked) {
-            if (indala_emit_run(d)) {
-                return true;
-            }
-        } else {
-            d->locked = true;
-            d->phase = 1;
-        }
-        if (!d->locked) {
-            d->locked = true;
-            d->phase = 1;
-        }
-        d->count = 1;
-    } else if (d->locked) {
-        if (d->count < 30000) {
-            d->count++;
-        }
-    }
-    d->last_sign = (int8_t)sign;
-    return false;
+    uint32_t start = n - (INDALA_CLOCK - 1);
+    int32_t score = ((start & 1u) == 0u) ? d->run_sum : -d->run_sum;
+    return indala_push_bit(d, (int)(start % INDALA_CLOCK), (uint8_t)(score >= 0));
 }
 
 static const nrf_pwm_sequence_t *indala_modulator(indala_codec *d, uint8_t *buf) {
