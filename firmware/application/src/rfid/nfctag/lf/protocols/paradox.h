@@ -6,16 +6,9 @@
 #define PARADOX_DATA_SIZE (12)
 #define PARADOX_RAW_BITS  (96)
 
-typedef enum {
-    PARADOX_DEC_WAIT,
-    PARADOX_DEC_COLLECT,
-} paradox_dec_state_t;
-
 typedef struct {
     uint8_t data[PARADOX_DATA_SIZE];
     fsk_t *modem;
-    uint8_t pre;
-    paradox_dec_state_t st;
     uint8_t n_bits;
     uint8_t bits[PARADOX_RAW_BITS];
 } paradox_codec;

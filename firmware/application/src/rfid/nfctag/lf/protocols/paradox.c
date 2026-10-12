@@ -124,12 +124,34 @@ static void paradox_codec_free(paradox_codec *d) {
 static void paradox_decoder_start(paradox_codec *d, uint8_t format) {
     (void)format;
     memset(d->data, 0, sizeof(d->data));
-    d->pre = 0;
-    d->st = PARADOX_DEC_WAIT;
     d->n_bits = 0;
     if (d->modem == NULL) {
         d->modem = fsk_alloc(FSK_BITRATE_HID);
     }
+}
+
+// Undo the 4-bit rotate applied by paradox_get_paradox_bits and check CRC-8/MAXIM.
+// A tag sitting on the LF coil clips the FSK waveform often enough to invent another
+// 00001111, so a preamble match alone is not a card.
+static bool paradox_raw_valid(const uint8_t raw[PARADOX_DATA_SIZE]) {
+    // On-air sync is 00001111 01010101 01010101 0101 (0F 55 55 5).
+    if (raw[0] != 0x0FU || raw[1] != 0x55U || raw[2] != 0x55U || (raw[3] & 0xF0U) != 0x50U) {
+        return false;
+    }
+
+    uint8_t old[PARADOX_DATA_SIZE];
+    old[0] = raw[0];
+    old[1] = (uint8_t)(raw[1] >> 4);
+    for (int i = 2; i < PARADOX_DATA_SIZE; i++) {
+        old[i] = (uint8_t)(((raw[i - 1] & 0x0FU) << 4) | (raw[i] >> 4));
+    }
+    if (old[1] != 0x05U || old[2] != 0x55U || old[3] != 0x55U) {
+        return false;
+    }
+
+    uint8_t crc = (uint8_t)((crc8_maxim(old + 1, 9) ^ 0x6U) & 0xFFU);
+    uint32_t encoded = manchester_encode_2bytes(crc);
+    return old[10] == (uint8_t)((encoded >> 8) & 0xFFU) && old[11] == (uint8_t)(encoded & 0xFFU);
 }
 
 static bool paradox_decoder_feed(paradox_codec *d, uint16_t val) {
@@ -138,47 +160,32 @@ static bool paradox_decoder_feed(paradox_codec *d, uint16_t val) {
         return false;
     }
 
-    if (d->st == PARADOX_DEC_WAIT) {
-        d->pre = (uint8_t)((d->pre << 1) | (bit ? 1U : 0U));
-        if (d->pre == 0x0FU) {
-            d->st = PARADOX_DEC_COLLECT;
-            d->n_bits = 0;
-            for (uint8_t i = 0; i < 8; i++) {
-                d->bits[i] = (uint8_t)((d->pre >> (7 - i)) & 1);
-            }
-            d->n_bits = 8;
-        }
-        return false;
-    }
-
-    if (d->st == PARADOX_DEC_COLLECT) {
-        if (d->n_bits >= PARADOX_RAW_BITS) {
-            d->st = PARADOX_DEC_WAIT;
-            d->pre = 0;
-            d->n_bits = 0;
-            return false;
-        }
+    if (d->n_bits < PARADOX_RAW_BITS) {
         d->bits[d->n_bits++] = bit ? 1U : 0U;
         if (d->n_bits < PARADOX_RAW_BITS) {
             return false;
         }
-        for (uint8_t i = 0, m = 0, p = 1; i < PARADOX_RAW_BITS; i++) {
-            d->data[m] <<= 1;
-            d->data[m] |= d->bits[i];
-            if (p == 8) {
-                m++;
-                p = 1;
-            } else {
-                p++;
-            }
-        }
-        d->st = PARADOX_DEC_WAIT;
-        d->pre = 0;
-        d->n_bits = 0;
-        return true;
+    } else {
+        memmove(d->bits, d->bits + 1, PARADOX_RAW_BITS - 1);
+        d->bits[PARADOX_RAW_BITS - 1] = bit ? 1U : 0U;
     }
 
-    return false;
+    // 00001111. Checked before the CRC so a sliding window does not decode every bit.
+    if (!(d->bits[0] == 0 && d->bits[1] == 0 && d->bits[2] == 0 && d->bits[3] == 0 &&
+          d->bits[4] == 1 && d->bits[5] == 1 && d->bits[6] == 1 && d->bits[7] == 1)) {
+        return false;
+    }
+
+    uint8_t raw[PARADOX_DATA_SIZE] = {0};
+    for (int i = 0; i < PARADOX_RAW_BITS; i++) {
+        raw[i / 8] = (uint8_t)((raw[i / 8] << 1) | d->bits[i]);
+    }
+    if (!paradox_raw_valid(raw)) {
+        return false;
+    }
+
+    memcpy(d->data, raw, PARADOX_DATA_SIZE);
+    return true;
 }
 
 static uint8_t *paradox_get_data(paradox_codec *d) {
