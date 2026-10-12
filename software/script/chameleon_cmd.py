@@ -815,6 +815,46 @@ class ChameleonCMD:
             resp.parsed = resp.data[:12]
         return resp
 
+    @expect_response(Status.LF_TAG_OK)
+    def indala_scan(self):
+        """Read an Indala 64-bit tag and return the 8-byte PSK1 frame."""
+        resp = self.device.send_cmd_sync(Command.INDALA_SCAN)
+        if resp.status == Status.LF_TAG_OK:
+            resp.parsed = resp.data[:8]
+        return resp
+
+    @expect_response(Status.SUCCESS)
+    def indala_encode(self, fc: int, cn: int, fmt_4041x: bool = False):
+        """Encode an Indala 64-bit facility/card pair to the 8-byte PSK1 frame."""
+        payload = struct.pack("!BHB", fc & 0xFF, cn & 0xFFFF, 1 if fmt_4041x else 0)
+        resp = self.device.send_cmd_sync(Command.INDALA_ENCODE, data=payload)
+        if resp.status == Status.SUCCESS:
+            resp.parsed = resp.data[:8]
+        return resp
+
+    @expect_response(Status.LF_TAG_OK)
+    def indala_write_to_t55xx(self, id_bytes: bytes, new_key: bytes = b"\x00\x00\x00\x00", old_keys=None):
+        """Write an 8-byte Indala 64-bit frame to a T5577."""
+        if len(id_bytes) != 8:
+            raise ValueError("Indala raw data must be 8 bytes")
+        if old_keys is None:
+            old_keys = [b"\x00\x00\x00\x00"]
+        data = struct.pack(f"!8s4s{4 * len(old_keys)}s", id_bytes, new_key, b"".join(old_keys))
+        return self.device.send_cmd_sync(Command.INDALA_WRITE_TO_T55XX, data)
+
+    @expect_response(Status.SUCCESS)
+    def indala_set_emu_id(self, raw8: bytes):
+        if len(raw8) != 8:
+            raise ValueError("Indala raw data must be 8 bytes")
+        return self.device.send_cmd_sync(Command.INDALA_SET_EMU_ID, data=raw8)
+
+    @expect_response(Status.SUCCESS)
+    def indala_get_emu_id(self):
+        resp = self.device.send_cmd_sync(Command.INDALA_GET_EMU_ID)
+        if resp.status == Status.SUCCESS and resp.data:
+            resp.parsed = resp.data[:8]
+        return resp
+
     def lf_sniff(self, timeout_ms: int = 2000):
         """
         Capture raw LF field ADC samples.

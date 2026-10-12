@@ -15,6 +15,7 @@
 #define LF_IDTECK_TAG_ID_SIZE 8
 #define LF_PARADOX_TAG_ID_SIZE 12
 #define LF_GALLAGHER_TAG_ID_SIZE 12
+#define LF_INDALA_TAG_ID_SIZE 8
 
 void lf_tag_125khz_sense_switch(bool enable);
 int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer);
@@ -36,4 +37,6 @@ int lf_tag_paradox_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buff
 bool lf_tag_paradox_data_factory(uint8_t slot, tag_specific_type_t tag_type);
 int lf_tag_gallagher_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
 bool lf_tag_gallagher_data_factory(uint8_t slot, tag_specific_type_t tag_type);
+int lf_tag_indala_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer);
+bool lf_tag_indala_data_factory(uint8_t slot, tag_specific_type_t tag_type);
 bool is_lf_field_exists(void);

@@ -125,6 +125,9 @@
 #define DATA_CMD_GALLAGHER_SCAN                 (3024)
 #define DATA_CMD_GALLAGHER_WRITE_TO_T55XX       (3025)
 #define DATA_CMD_GALLAGHER_ENCODE               (3026)
+#define DATA_CMD_INDALA_SCAN                    (3027)
+#define DATA_CMD_INDALA_WRITE_TO_T55XX          (3028)
+#define DATA_CMD_INDALA_ENCODE                  (3029)
 
 //
 // ******************************************************************
@@ -218,6 +221,8 @@
 #define DATA_CMD_PARADOX_GET_EMU_ID             (5015)
 #define DATA_CMD_GALLAGHER_SET_EMU_ID           (5016)
 #define DATA_CMD_GALLAGHER_GET_EMU_ID           (5017)
+#define DATA_CMD_INDALA_SET_EMU_ID              (5018)
+#define DATA_CMD_INDALA_GET_EMU_ID              (5019)
 
 #define DATA_CMD_EM4X05_SCAN                    (3030)
 #define DATA_CMD_EM4X05_READSNIFF               (3032)

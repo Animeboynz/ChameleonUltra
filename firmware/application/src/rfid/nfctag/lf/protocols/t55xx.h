@@ -99,6 +99,14 @@ extern "C" {
     T5577_PWD |                   \
     (2 << T5577_MAXBLOCK_SHIFT))
 
+// Indala 64-bit: PSK1 at RF/32, subcarrier = carrier/2, 2 data blocks.
+#define T5577_INDALA_CONFIG (     \
+    T5577_BITRATE_RF_32 |         \
+    T5577_MODULATION_PSK1 |       \
+    T5577_PSKCF_RF_2 |            \
+    T5577_PWD |                   \
+    (2 << T5577_MAXBLOCK_SHIFT))
+
 // IDTECK: PSK1 at RF/32, subcarrier = carrier/2 (RF_2), 2 data blocks (64-bit frame).
 #define T5577_IDTECK_CONFIG (     \
     T5577_BITRATE_RF_32 |         \

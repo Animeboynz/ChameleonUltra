@@ -10,6 +10,7 @@
 #include "nrfx_pwm.h"
 #include "protocols/em410x.h"
 #include "protocols/gallagher.h"
+#include "protocols/indala.h"
 #include "protocols/hidprox.h"
 #include "protocols/idteck.h"
 #include "protocols/ioprox.h"
@@ -290,6 +291,15 @@ int lf_tag_data_loadcb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
         return LF_GALLAGHER_TAG_ID_SIZE;
     }
 
+    if (type == TAG_TYPE_INDALA && buffer->length >= LF_INDALA_TAG_ID_SIZE) {
+        m_tag_type = type;
+        void *codec = indala.alloc();
+        m_pwm_seq = indala.modulator(codec, buffer->buffer);
+        indala.free(codec);
+        NRF_LOG_INFO("load lf indala data finish.");
+        return LF_INDALA_TAG_ID_SIZE;
+    }
+
     if (type == TAG_TYPE_JABLOTRON && buffer->length >= LF_JABLOTRON_TAG_ID_SIZE) {
         m_tag_type = type;
         void *codec = jablotron.alloc();
@@ -489,6 +499,20 @@ bool lf_tag_gallagher_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
     // Region A (0), facility 9876, card 1234, issue 1.
     static const uint8_t tag_id[LF_GALLAGHER_TAG_ID_SIZE] = {
         0x7f, 0xea, 0xa3, 0x4b, 0xa4, 0xcb, 0x5a, 0x34, 0x06, 0x8c, 0x92, 0x2b,
+    };
+    return lf_tag_data_factory(slot, tag_type, (uint8_t *)tag_id, sizeof(tag_id));
+}
+
+int lf_tag_indala_data_savecb(tag_specific_type_t type, tag_data_buffer_t *buffer) {
+    (void)type;
+    (void)buffer;
+    return m_tag_type == TAG_TYPE_INDALA ? LF_INDALA_TAG_ID_SIZE : 0;
+}
+
+bool lf_tag_indala_data_factory(uint8_t slot, tag_specific_type_t tag_type) {
+    // Standard 26-bit layout, facility 123, card 1337.
+    static const uint8_t tag_id[LF_INDALA_TAG_ID_SIZE] = {
+        0xa0, 0x00, 0x00, 0x00, 0x8f, 0x49, 0xd2, 0xa1,
     };
     return lf_tag_data_factory(slot, tag_type, (uint8_t *)tag_id, sizeof(tag_id));
 }

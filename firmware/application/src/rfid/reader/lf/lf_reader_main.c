@@ -14,6 +14,7 @@
 #include "protocols/jablotron.h"
 #include "protocols/pac.h"
 #include "protocols/gallagher.h"
+#include "protocols/indala.h"
 #include "protocols/paradox.h"
 #include "protocols/viking.h"
 
@@ -115,6 +116,13 @@ uint8_t scan_paradox(uint8_t *data) {
 
 uint8_t scan_gallagher(uint8_t *data) {
     if (gallagher_read(data, g_timeout_readem_ms)) {
+        return STATUS_LF_TAG_OK;
+    }
+    return STATUS_LF_TAG_NO_FOUND;
+}
+
+uint8_t scan_indala(uint8_t *data) {
+    if (indala_read(data, g_timeout_readem_ms)) {
         return STATUS_LF_TAG_OK;
     }
     return STATUS_LF_TAG_NO_FOUND;
@@ -246,6 +254,15 @@ uint8_t write_paradox_to_t55xx(uint8_t *raw12, uint8_t *new_passwd, uint8_t *old
 uint8_t write_gallagher_to_t55xx(uint8_t *raw12, uint8_t *new_passwd, uint8_t *old_passwds, uint8_t old_passwd_count) {
     uint32_t blks[7] = {0x00};
     uint8_t blk_count = gallagher_t55xx_writer(raw12, blks);
+    if (blk_count == 0) {
+        return STATUS_PAR_ERR;
+    }
+    return write_t55xx(blks, blk_count, new_passwd, old_passwds, old_passwd_count);
+}
+
+uint8_t write_indala_to_t55xx(uint8_t *raw, uint8_t *new_passwd, uint8_t *old_passwds, uint8_t old_passwd_count) {
+    uint32_t blks[7] = {0x00};
+    uint8_t blk_count = indala_t55xx_writer(raw, blks);
     if (blk_count == 0) {
         return STATUS_PAR_ERR;
     }

@@ -113,6 +113,9 @@ class Command(enum.IntEnum):
     GALLAGHER_SCAN = 3024
     GALLAGHER_WRITE_TO_T55XX = 3025
     GALLAGHER_ENCODE = 3026
+    INDALA_SCAN = 3027
+    INDALA_WRITE_TO_T55XX = 3028
+    INDALA_ENCODE = 3029
 
     MF1_WRITE_EMU_BLOCK_DATA = 4000
     HF14A_SET_ANTI_COLL_DATA = 4001
@@ -193,6 +196,8 @@ class Command(enum.IntEnum):
     PARADOX_GET_EMU_ID = 5015
     GALLAGHER_SET_EMU_ID = 5016
     GALLAGHER_GET_EMU_ID = 5017
+    INDALA_SET_EMU_ID = 5018
+    INDALA_GET_EMU_ID = 5019
     EM4X05_SCAN = 3030
     EM4X05_READSNIFF = 3032
     LF_SNIFF = 3031
@@ -344,7 +349,7 @@ class TagSpecificType(enum.IntEnum):
     # AWID
 
     # PSK Tag-Talk-First      300
-    # Indala
+    Indala = 300
     # Keri
     # NexWatch
     IDTECK = 310
@@ -425,6 +430,8 @@ class TagSpecificType(enum.IntEnum):
             return "EM410X Electra"
         elif self == TagSpecificType.Gallagher:
             return "Gallagher"
+        elif self == TagSpecificType.Indala:
+            return "Indala"
         elif self == TagSpecificType.HIDProx:
             return "HIDProx"
         elif self == TagSpecificType.ioProx:

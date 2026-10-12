@@ -956,6 +956,7 @@ lf_viking = lf.subgroup("viking", "Viking commands")
 lf_jablotron = lf.subgroup("jablotron", "Jablotron commands")
 lf_paradox = lf.subgroup("paradox", "Paradox commands")
 lf_gallagher = lf.subgroup("gallagher", "Gallagher commands")
+lf_indala = lf.subgroup("indala", "Indala commands")
 lf_generic = lf.subgroup("generic", "Generic commands")
 lf_idteck = lf.subgroup("idteck", "IDTECK commands")
 
@@ -6927,6 +6928,9 @@ class HWSlotList(DeviceRequiredUnit):
                 if lf_tag_type == TagSpecificType.Gallagher:
                     id = self.cmd.gallagher_get_emu_id()
                     print(f"      {'ID:':40}{color_string((CY, id.hex().upper()))}")
+                if lf_tag_type == TagSpecificType.Indala:
+                    id = self.cmd.indala_get_emu_id()
+                    print(f"      {'ID:':40}{color_string((CY, id.hex().upper()))}")
                 if lf_tag_type == TagSpecificType.PAC:
                     id = self.cmd.pac_get_emu_id()
                     id_ascii = ''.join(chr(b) if 0x20 <= b < 0x7f else '.' for b in id)
@@ -7346,6 +7350,106 @@ class LFGallagherEconfig(SlotIndexArgsAndGoUnit, LFGallagherIdArgsUnit):
         else:
             response = self.cmd.gallagher_get_emu_id()
             print(" - Get Gallagher tag id success.")
+            print(f"ID: {response.hex().upper()}")
+
+
+class LFIndalaIdArgsUnit(DeviceRequiredUnit):
+    @staticmethod
+    def add_card_arg(parser: ArgumentParserNoExit, required=False):
+        parser.add_argument(
+            "--id", type=str, required=required, help="Indala 64-bit raw id (8 bytes hex)", metavar="<hex>"
+        )
+        return parser
+
+    def before_exec(self, args: argparse.Namespace):
+        if not super().before_exec(args):
+            return False
+        if args.id is None:
+            return True
+        if not re.match(r"^[a-fA-F0-9]{16}$", args.id):
+            raise ArgsParserError("ID must include 16 HEX symbols (8 bytes)")
+        return True
+
+    def args_parser(self) -> ArgumentParserNoExit:
+        raise NotImplementedError("Please implement this")
+
+    def on_exec(self, args: argparse.Namespace):
+        raise NotImplementedError("Please implement this")
+
+
+@lf_indala.command("read")
+class LFIndalaRead(ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Scan an Indala tag and print the 8-byte PSK1 frame"
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        raw = self.cmd.indala_scan()
+        print(f" Indala ID: {color_string((CG, raw.hex().upper()))}")
+
+
+@lf_indala.command("write")
+class LFIndalaWriteT55xx(LFIndalaIdArgsUnit, ReaderRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Write an Indala 64-bit frame to a T5577"
+        return self.add_card_arg(parser, required=True)
+
+    def on_exec(self, args: argparse.Namespace):
+        raw = bytes.fromhex(args.id)
+        self.cmd.indala_write_to_t55xx(raw)
+        print(f" - Indala ID: {args.id.upper()} write done.")
+
+
+@lf_indala.command("encode")
+class LFIndalaEncode(DeviceRequiredUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Encode an Indala 64-bit facility code and card number"
+        parser.add_argument("--fc", type=int, required=True, help="Facility code (0-255)")
+        parser.add_argument("--cn", type=int, required=True, help="Card number (0-65535)")
+        parser.add_argument("--4041x", dest="fmt_4041x", action="store_true", help="Use the 4041X parity layout")
+        return parser
+
+    def before_exec(self, args: argparse.Namespace):
+        if not super().before_exec(args):
+            return False
+        if args.fc < 0 or args.fc > 255:
+            raise ArgsParserError("Facility code must be between 0 and 255")
+        if args.cn < 0 or args.cn > 65535:
+            raise ArgsParserError("Card number must be between 0 and 65535")
+        return True
+
+    def on_exec(self, args: argparse.Namespace):
+        raw = self.cmd.indala_encode(args.fc, args.cn, args.fmt_4041x)
+        print(f" Facility: {args.fc}")
+        print(f" Card: {args.cn}")
+        print(f" Format: {'4041X' if args.fmt_4041x else '26-bit'}")
+        print(f" Raw: {color_string((CG, raw.hex().upper()))}")
+
+
+@lf_indala.command("econfig")
+class LFIndalaEconfig(SlotIndexArgsAndGoUnit, LFIndalaIdArgsUnit):
+    def args_parser(self) -> ArgumentParserNoExit:
+        parser = ArgumentParserNoExit()
+        parser.description = "Set the emulated Indala card id"
+        self.add_slot_args(parser)
+        self.add_card_arg(parser)
+        return parser
+
+    def on_exec(self, args: argparse.Namespace):
+        if args.id is not None:
+            slotinfo = self.cmd.get_slot_info()
+            selected = SlotNumber.from_fw(self.cmd.get_active_slot())
+            lf_tag_type = TagSpecificType(slotinfo[selected - 1]["lf"])
+            if lf_tag_type != TagSpecificType.Indala:
+                print(f"{color_string((CR, 'WARNING'))}: Slot type not set to Indala.")
+            self.cmd.indala_set_emu_id(bytes.fromhex(args.id))
+            print(" - Set Indala tag id success.")
+        else:
+            response = self.cmd.indala_get_emu_id()
+            print(" - Get Indala tag id success.")
             print(f"ID: {response.hex().upper()}")
 
 

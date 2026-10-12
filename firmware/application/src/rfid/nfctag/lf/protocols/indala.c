@@ -1,0 +1,333 @@
+#include "indala.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "nrf_pwm.h"
+#include "parity.h"
+#include "t55xx.h"
+#include "tag_base_type.h"
+#include "utils/psk1.h"
+
+/*
+ * Indala 64-bit. PSK1 at RF/32, subcarrier RF/2.
+ *
+ * The 33-bit preamble is bit 0 = 1, bit 2 = 1, bit 32 = 1, and the rest of
+ * the first 33 bits clear. Facility and card bits are scattered by the
+ * Proxmark3 getIndalaBits() / getIndalaBits4041x() maps.
+ *
+ * The reader samples the op-amp once per 125 kHz carrier cycle. PSK1 with
+ * an RF/2 subcarrier is then an alternating sample pair, and a bit that
+ * changes the phase produces two samples of the same sign. That is the
+ * waveform Proxmark3 builds in pskSimBit() with carrier 2 and clock 32.
+ */
+
+#define INDALA_PWM_ENTRIES       (INDALA_BIT_COUNT * LF_PSK1_RF32_SUBCYCLES_PER_BIT)
+#define INDALA_T55XX_BLOCK_COUNT (3)
+
+static nrf_pwm_values_wave_form_t m_indala_pwm_seq_vals[INDALA_PWM_ENTRIES] = {};
+
+static nrf_pwm_sequence_t m_indala_pwm_seq = {
+    .values.p_wave_form = m_indala_pwm_seq_vals,
+    .length = NRF_PWM_VALUES_LENGTH(m_indala_pwm_seq_vals),
+    .repeats = 0,
+    .end_delay = 0,
+};
+
+static void indala_decoder_reset(indala_codec *d) {
+    d->mean = 0;
+    d->count = 0;
+    d->nbits = 0;
+    d->phase = 1;
+    d->last_sign = -1;
+    d->seeded = false;
+    d->locked = false;
+}
+
+static indala_codec *indala_alloc(void) {
+    indala_codec *d = malloc(sizeof(indala_codec));
+    if (d == NULL) {
+        return NULL;
+    }
+    memset(d, 0, sizeof(*d));
+    indala_decoder_reset(d);
+    return d;
+}
+
+static void indala_free(indala_codec *d) {
+    free(d);
+}
+
+static uint8_t *indala_get_data(indala_codec *d) {
+    return d->data;
+}
+
+static void indala_decoder_start(indala_codec *d, uint8_t format) {
+    (void)format;
+    memset(d->data, 0, INDALA_DATA_SIZE);
+    indala_decoder_reset(d);
+}
+
+// 33-bit Indala preamble: 1, 0, 1, then 29 zeros, then 1.
+static bool indala_preamble_at(const uint8_t *bits, uint8_t invert) {
+    if ((bits[0] ^ invert) != 1 || (bits[1] ^ invert) != 0 || (bits[2] ^ invert) != 1) {
+        return false;
+    }
+    if ((bits[32] ^ invert) != 1) {
+        return false;
+    }
+    for (int i = 3; i < 32; i++) {
+        if ((bits[i] ^ invert) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void indala_pack_frame(indala_codec *d, const uint8_t *bits, uint8_t invert) {
+    memset(d->data, 0, INDALA_DATA_SIZE);
+    for (int i = 0; i < INDALA_BIT_COUNT; i++) {
+        if (bits[i] ^ invert) {
+            d->data[i / 8] |= (uint8_t)(1u << (7 - (i % 8)));
+        }
+    }
+}
+
+static bool indala_push_bit(indala_codec *d, uint8_t bit) {
+    if (d->nbits == INDALA_BIT_WINDOW) {
+        memmove(d->bits, d->bits + 1, INDALA_BIT_WINDOW - 1);
+        d->nbits = INDALA_BIT_WINDOW - 1;
+    }
+    d->bits[d->nbits++] = bit;
+    if (d->nbits < INDALA_BIT_COUNT) {
+        return false;
+    }
+    for (int start = (int)d->nbits - INDALA_BIT_COUNT; start >= 0; start--) {
+        for (uint8_t invert = 0; invert < 2; invert++) {
+            if (indala_preamble_at(d->bits + start, invert)) {
+                indala_pack_frame(d, d->bits + start, invert);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Samples since the last phase change belong to the current phase. A run
+// of N carrier cycles is round(N / 32) copies of that phase.
+static bool indala_emit_run(indala_codec *d) {
+    int nbits = ((int)d->count + 16) / 32;
+    if (nbits <= 0) {
+        return false;
+    }
+    if (nbits > 48) {
+        d->nbits = 0;
+        d->locked = false;
+        return false;
+    }
+    for (int i = 0; i < nbits; i++) {
+        if (indala_push_bit(d, d->phase)) {
+            return true;
+        }
+    }
+    d->phase ^= 1u;
+    return false;
+}
+
+static bool indala_decoder_feed(indala_codec *d, uint16_t val) {
+    if (!d->seeded) {
+        d->mean = val;
+        d->seeded = true;
+        return false;
+    }
+
+    d->mean += ((int32_t)val - d->mean) / 16;
+    uint8_t sign = ((int32_t)val >= d->mean) ? 1u : 0u;
+    if (d->last_sign < 0) {
+        d->last_sign = (int8_t)sign;
+        return false;
+    }
+
+    if (sign == (uint8_t)d->last_sign) {
+        if (d->locked) {
+            if (indala_emit_run(d)) {
+                return true;
+            }
+        } else {
+            d->locked = true;
+            d->phase = 1;
+        }
+        if (!d->locked) {
+            d->locked = true;
+            d->phase = 1;
+        }
+        d->count = 1;
+    } else if (d->locked) {
+        if (d->count < 30000) {
+            d->count++;
+        }
+    }
+    d->last_sign = (int8_t)sign;
+    return false;
+}
+
+static const nrf_pwm_sequence_t *indala_modulator(indala_codec *d, uint8_t *buf) {
+    (void)d;
+
+    size_t n = lf_psk1_build_sequence(buf, INDALA_BIT_COUNT, m_indala_pwm_seq_vals, INDALA_PWM_ENTRIES);
+    m_indala_pwm_seq.length = (uint16_t)(n * 4);
+    return &m_indala_pwm_seq;
+}
+
+const protocol indala = {
+    .tag_type = TAG_TYPE_INDALA,
+    .data_size = INDALA_DATA_SIZE,
+    .alloc = (codec_alloc)indala_alloc,
+    .free = (codec_free)indala_free,
+    .get_data = (codec_get_data)indala_get_data,
+    .modulator = (modulator)indala_modulator,
+    .decoder =
+        {
+            .start = (decoder_start)indala_decoder_start,
+            .feed = (decoder_feed)indala_decoder_feed,
+        },
+};
+
+uint8_t indala_t55xx_writer(uint8_t *raw, uint32_t *blks) {
+    uint32_t hi = 0;
+    uint32_t lo = 0;
+    for (int i = 0; i < 4; i++) {
+        hi = (hi << 8) | raw[i];
+    }
+    for (int i = 4; i < 8; i++) {
+        lo = (lo << 8) | raw[i];
+    }
+    blks[0] = T5577_INDALA_CONFIG;
+    blks[1] = hi;
+    blks[2] = lo;
+    return INDALA_T55XX_BLOCK_COUNT;
+}
+
+static void indala_pack(const uint8_t bits[INDALA_BIT_COUNT], uint8_t raw[INDALA_DATA_SIZE]) {
+    memset(raw, 0, INDALA_DATA_SIZE);
+    for (int i = 0; i < INDALA_BIT_COUNT; i++) {
+        if (bits[i]) {
+            raw[i / 8] |= (uint8_t)(1u << (7 - (i % 8)));
+        }
+    }
+}
+
+// Proxmark3 client/src/cmdlfindala.c getIndalaBits(). The bit array must
+// start cleared; that function only writes the bits it owns.
+static void indala_bits_standard(uint8_t fc, uint16_t cn, uint8_t bits[INDALA_BIT_COUNT]) {
+    bits[0] = 1;
+    bits[2] = 1;
+    bits[32] = 1;
+
+    bits[57] = (uint8_t)((fc >> 7) & 1);
+    bits[49] = (uint8_t)((fc >> 6) & 1);
+    bits[44] = (uint8_t)((fc >> 5) & 1);
+    bits[47] = (uint8_t)((fc >> 4) & 1);
+    bits[48] = (uint8_t)((fc >> 3) & 1);
+    bits[53] = (uint8_t)((fc >> 2) & 1);
+    bits[39] = (uint8_t)((fc >> 1) & 1);
+    bits[58] = (uint8_t)(fc & 1);
+
+    bits[42] = (uint8_t)((cn >> 15) & 1);
+    bits[45] = (uint8_t)((cn >> 14) & 1);
+    bits[43] = (uint8_t)((cn >> 13) & 1);
+    bits[40] = (uint8_t)((cn >> 12) & 1);
+    bits[52] = (uint8_t)((cn >> 11) & 1);
+    bits[36] = (uint8_t)((cn >> 10) & 1);
+    bits[35] = (uint8_t)((cn >> 9) & 1);
+    bits[51] = (uint8_t)((cn >> 8) & 1);
+    bits[46] = (uint8_t)((cn >> 7) & 1);
+    bits[33] = (uint8_t)((cn >> 6) & 1);
+    bits[37] = (uint8_t)((cn >> 5) & 1);
+    bits[54] = (uint8_t)((cn >> 4) & 1);
+    bits[56] = (uint8_t)((cn >> 3) & 1);
+    bits[59] = (uint8_t)((cn >> 2) & 1);
+    bits[50] = (uint8_t)((cn >> 1) & 1);
+    bits[41] = (uint8_t)(cn & 1);
+
+    uint8_t chk = 0;
+    chk = (uint8_t)(chk + ((cn >> 14) & 1));
+    chk = (uint8_t)(chk + ((cn >> 12) & 1));
+    chk = (uint8_t)(chk + ((cn >> 9) & 1));
+    chk = (uint8_t)(chk + ((cn >> 8) & 1));
+    chk = (uint8_t)(chk + ((cn >> 6) & 1));
+    chk = (uint8_t)(chk + ((cn >> 5) & 1));
+    chk = (uint8_t)(chk + ((cn >> 2) & 1));
+    chk = (uint8_t)(chk + (cn & 1));
+    if ((chk & 1) == 0) {
+        bits[62] = 1;
+        bits[63] = 0;
+    } else {
+        bits[62] = 0;
+        bits[63] = 1;
+    }
+
+    bits[34] = 0;
+    bits[38] = 0;
+    uint8_t p1 = 1;
+    uint8_t p2 = 1;
+    for (int i = 33; i < 64; i++) {
+        if (i % 2) {
+            p1 ^= bits[i];
+        } else {
+            p2 ^= bits[i];
+        }
+    }
+    bits[34] = p1;
+    bits[38] = p2;
+}
+
+// Proxmark3 getIndalaBits4041x(). Parity replaces the standard checksum.
+static void indala_bits_4041x(uint8_t fc, uint16_t cn, uint8_t bits[INDALA_BIT_COUNT]) {
+    bits[0] = 1;
+    bits[2] = 1;
+    bits[32] = 1;
+    bits[40] = 1;
+    bits[55] = 1;
+
+    bits[57] = (uint8_t)((fc >> 7) & 1);
+    bits[49] = (uint8_t)((fc >> 6) & 1);
+    bits[44] = (uint8_t)((fc >> 5) & 1);
+    bits[47] = (uint8_t)((fc >> 4) & 1);
+    bits[48] = (uint8_t)((fc >> 3) & 1);
+    bits[53] = (uint8_t)((fc >> 2) & 1);
+    bits[39] = (uint8_t)((fc >> 1) & 1);
+    bits[58] = (uint8_t)(fc & 1);
+
+    bits[42] = (uint8_t)((cn >> 15) & 1);
+    bits[45] = (uint8_t)((cn >> 14) & 1);
+    bits[43] = (uint8_t)((cn >> 13) & 1);
+    bits[40] = (uint8_t)((cn >> 12) & 1);
+    bits[52] = (uint8_t)((cn >> 11) & 1);
+    bits[36] = (uint8_t)((cn >> 10) & 1);
+    bits[35] = (uint8_t)((cn >> 9) & 1);
+    bits[51] = (uint8_t)((cn >> 8) & 1);
+    bits[46] = (uint8_t)((cn >> 7) & 1);
+    bits[33] = (uint8_t)((cn >> 6) & 1);
+    bits[37] = (uint8_t)((cn >> 5) & 1);
+    bits[54] = (uint8_t)((cn >> 4) & 1);
+    bits[56] = (uint8_t)((cn >> 3) & 1);
+    bits[59] = (uint8_t)((cn >> 2) & 1);
+    bits[50] = (uint8_t)((cn >> 1) & 1);
+    bits[41] = (uint8_t)(cn & 1);
+
+    bits[34] = evenparity32(((uint32_t)fc << 4) | ((uint32_t)cn >> 12));
+    bits[38] = oddparity32((uint32_t)cn & 0x0fffu);
+}
+
+bool indala_encode_fc_cn(uint8_t fc, uint16_t cn, bool fmt_4041x, uint8_t raw[INDALA_DATA_SIZE]) {
+    uint8_t bits[INDALA_BIT_COUNT];
+    memset(bits, 0, sizeof(bits));
+    if (fmt_4041x) {
+        indala_bits_4041x(fc, cn, bits);
+    } else {
+        indala_bits_standard(fc, cn, bits);
+    }
+    indala_pack(bits, raw);
+    return true;
+}
